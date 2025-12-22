@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::iter::from_fn;
 use clap::{Parser, ValueEnum};
 use serde_json::Value;
@@ -38,6 +39,19 @@ fn decode_bencoded_value(encoded_value: &str) -> (Value, &str) {
         }).collect::<Vec<Value>>();
 
         (result.into(), &rest[1..])
+    } else if let Some(mut rest) = encoded_value.strip_prefix('d') {
+        let result = from_fn(|| {
+            if rest.starts_with('e') {
+                None
+            } else {
+                let (key, reminder) = decode_bencoded_value(rest);
+                let (val, reminder) = decode_bencoded_value(reminder);
+                rest = reminder;
+                Some((key, val))
+            }
+        }).collect::<HashMap<Value, Value>>();
+
+        (serde_json::to_value(result).unwrap(), &rest[1..])
     } else if let Some((n, rest)) = encoded_value
         .strip_prefix('i')
         .and_then(|s| s.split_once('e')
@@ -70,6 +84,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use serde_json::json;
     use super::*;
 
@@ -88,5 +103,10 @@ mod tests {
     fn decode_lists() {
         assert_eq!(decode_bencoded_value("l3:abci467ee"), (vec![json!("abc"), json!(467)].into(), ""));
         assert_eq!(decode_bencoded_value("l3:abcli12eei467ee"), (vec![json!("abc"), json!(vec![json!(12)]), json!(467)].into(), ""));
+    }
+
+    #[test]
+    fn decode_dicts() {
+        assert_eq!(decode_bencoded_value("d3:abci467ee"), (serde_json::to_value(&HashMap::from([(json!("abc"), json!(467))])).unwrap(), ""));
     }
 }
