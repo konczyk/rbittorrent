@@ -20,7 +20,7 @@ $ ./target/debug/rbittorrent -h
 Usage: rbittorrent <COMMAND> <VALUE>
 
 Arguments:
-  <COMMAND>  Name of the command [possible values: decode]
+  <COMMAND>  Name of the command [possible values: decode, info]
   <VALUE>    Value to process
 
 Options:

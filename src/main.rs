@@ -2,12 +2,13 @@ use clap::{Parser, ValueEnum};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::iter::from_fn;
-use std::io;
+use std::{fs, io};
 
 #[derive(Debug, Clone, ValueEnum)]
 #[value(rename_all = "lowercase")]
 enum Command {
     Decode,
+    Info,
 }
 
 #[derive(Parser, Debug)]
@@ -83,9 +84,10 @@ fn decode_bencoded_value(encoded_value: &[u8]) -> (Value, &[u8]) {
                     })
                 })
                 .and_then(|(n, s)| {
-                    str::from_utf8(&s[..n])
-                        .map(|v| (v.into(), &s[n..]))
-                        .ok()
+                    match str::from_utf8(&s[..n]) {
+                        Ok(v) => Some((v.into(), &s[n..])),
+                        Err(_) => Some((hex::encode(encoded_value).into(), &s[n..]))
+                    }
                 })
                 .expect("Invalid bencoded string")
         },
@@ -100,6 +102,15 @@ fn main() -> io::Result<()> {
         Command::Decode => {
             println!("{}", decode_bencoded_value(args.value.as_bytes()).0);
             Ok(())
+        },
+        Command::Info => {
+            fs::read(args.value)
+                .and_then(|cnt| {
+                    let (info, _) = decode_bencoded_value(cnt.as_slice());
+                    println!("Tracker URL: {}", info["announce"].as_str().unwrap());
+                    println!("Length: {}", info["info"]["length"]);
+                    Ok(())
+                })
         },
     }
 }
