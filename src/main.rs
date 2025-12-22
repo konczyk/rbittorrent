@@ -1,4 +1,6 @@
+use std::iter::from_fn;
 use clap::{Parser, ValueEnum};
+use serde_json::Value;
 
 #[derive(Debug, Clone, ValueEnum)]
 #[value(rename_all = "lowercase")]
@@ -23,19 +25,34 @@ struct Args {
     value: String,
 }
 
+fn decode_bencoded_value(encoded_value: &str) -> (Value, &str) {
+    if let Some(mut rest) = encoded_value.strip_prefix('l') {
+        let result = from_fn(|| {
+            if rest.starts_with('e') {
+                None
+            } else {
+                let (val, reminder) = decode_bencoded_value(rest);
+                rest = reminder;
+                Some(val)
+            }
+        }).collect::<Vec<Value>>();
 
-fn decode_bencoded_value(encoded_value: &str) -> serde_json::Value {
-    if let Some(n) = encoded_value
+        (result.into(), &rest[1..])
+    } else if let Some((n, rest)) = encoded_value
         .strip_prefix('i')
-        .and_then(|s| s.strip_suffix('e')
-        .and_then(|n| n.parse::<isize>().ok()))
+        .and_then(|s| s.split_once('e')
+        .and_then(|(n, rest)| n.parse::<isize>()
+            .ok()
+            .map(|x| (x, rest))))
     {
-        n.into()
+        (n.into(), rest)
     } else if let Some((n, s)) = encoded_value
         .split_once(':')
-        .and_then(|(n, s)| n.parse::<usize>().ok().map(|x| (x, s)))
+        .and_then(|(n, s)| n.parse::<usize>()
+            .ok()
+            .map(|x| (x, s)))
     {
-        s[..n].into()
+        (s[..n].into(), &s[n..])
     } else {
         panic!("Unhandled encoded value: {}", encoded_value)
     }
@@ -46,23 +63,30 @@ fn main() {
 
     match args.command {
         Command::Decode => {
-            println!("{}", decode_bencoded_value(args.value.as_str()))
+            println!("{}", decode_bencoded_value(args.value.as_str()).0)
         },
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use super::*;
 
     #[test]
     fn decode_strings() {
-        assert_eq!(decode_bencoded_value("3:abc"), "abc");
+        assert_eq!(decode_bencoded_value("3:abc"), ("abc".into(), ""));
     }
 
     #[test]
     fn decode_integers() {
-        assert_eq!(decode_bencoded_value("i467e"), 467);
-        assert_eq!(decode_bencoded_value("i-467e"), -467);
+        assert_eq!(decode_bencoded_value("i467e"), (467.into(), ""));
+        assert_eq!(decode_bencoded_value("i-467e"), ((-467).into(), ""));
+    }
+
+    #[test]
+    fn decode_lists() {
+        assert_eq!(decode_bencoded_value("l3:abci467ee"), (vec![json!("abc"), json!(467)].into(), ""));
+        assert_eq!(decode_bencoded_value("l3:abcli12eei467ee"), (vec![json!("abc"), json!(vec![json!(12)]), json!(467)].into(), ""));
     }
 }
