@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::iter::from_fn;
 use std::{fs, io};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum BencodeValue<'a> {
     String(String),
     Binary(Vec<u8>),
@@ -50,11 +50,7 @@ struct Args {
     value: String,
 }
 
-fn decode_bencoded_value(encoded_value: &[u8]) -> Value {
-    to_bencode_value(encoded_value).0.to_json()
-}
-
-fn to_bencode_value(encoded_value: &[u8]) -> (BencodeValue<'_>, &[u8], &[u8]) {
+fn decode_bencoded_value(encoded_value: &[u8]) -> (BencodeValue<'_>, &[u8], &[u8]) {
     let (bv, rest) = match encoded_value[0] {
         b'l' => {
             let mut rest = &encoded_value[1..];
@@ -62,7 +58,7 @@ fn to_bencode_value(encoded_value: &[u8]) -> (BencodeValue<'_>, &[u8], &[u8]) {
                 if rest.is_empty() || rest[0] == b'e' {
                     None
                 } else {
-                    let (val, reminder, raw) = to_bencode_value(rest);
+                    let (val, reminder, raw) = decode_bencoded_value(rest);
                     rest = reminder;
                     Some((val, raw)) }
             }).collect::<Vec<(BencodeValue, &[u8])>>();
@@ -75,8 +71,8 @@ fn to_bencode_value(encoded_value: &[u8]) -> (BencodeValue<'_>, &[u8], &[u8]) {
                 if rest.is_empty() || rest[0] == b'e' {
                     None
                 } else {
-                    let (key, reminder, _) = to_bencode_value(rest);
-                    let (val, reminder, raw) = to_bencode_value(reminder);
+                    let (key, reminder, _) = decode_bencoded_value(rest);
+                    let (val, reminder, raw) = decode_bencoded_value(reminder);
                     rest = reminder;
                     if let BencodeValue::String(k) = key {
                         Some((k, (val, raw)))
@@ -132,13 +128,13 @@ fn main() -> io::Result<()> {
 
     match args.command {
         Command::Decode => {
-            println!("{}", decode_bencoded_value(args.value.as_bytes()));
+            println!("{}", decode_bencoded_value(args.value.as_bytes()).0.to_json());
             Ok(())
         },
         Command::Info => {
             fs::read(args.value)
                 .and_then(|cnt| {
-                    let (val, _, _) = to_bencode_value(cnt.as_slice());
+                    let (val, _, _) = decode_bencoded_value(cnt.as_slice());
                     if let BencodeValue::Dict(d) = val {
                         if let Some((BencodeValue::String(url), _)) = d.get("announce") {
                             println!("Tracker URL: {url}");
@@ -166,25 +162,42 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn decode_strings() {
-        assert_eq!(decode_bencoded_value("3:abc".as_bytes()), json!("abc"));
+    fn handle_strings() {
+        assert_eq!(
+            decode_bencoded_value("3:abc".as_bytes()),
+            (BencodeValue::String("abc".to_string()), "".as_bytes(), "3:abc".as_bytes())
+        );
+        assert_eq!(BencodeValue::String("abc".to_string()).to_json(), json!("abc"))
     }
 
     #[test]
-    fn decode_integers() {
-        assert_eq!(decode_bencoded_value("i467e".as_bytes()), json!(467));
-        assert_eq!(decode_bencoded_value("i-467e".as_bytes()), json!(-467));
+    fn handle_integers() {
+        assert_eq!(
+            decode_bencoded_value("i467e".as_bytes()),
+            (BencodeValue::Integer(467), "".as_bytes(), "i467e".as_bytes())
+        );
+        assert_eq!(
+            decode_bencoded_value("i-467e".as_bytes()),
+            (BencodeValue::Integer(-467), "".as_bytes(), "i-467e".as_bytes())
+        );
+        assert_eq!(BencodeValue::Integer(467).to_json(), json!(467));
+        assert_eq!(BencodeValue::Integer(-467).to_json(), json!(-467));
     }
 
     #[test]
     fn decode_lists() {
-        assert_eq!(decode_bencoded_value("l3:abci467ee".as_bytes()), Value::Array(vec![json!("abc"), json!(467)]));
-        assert_eq!(decode_bencoded_value("l3:abcli12eei467ee".as_bytes()), Value::Array(vec![json!("abc"), json!(vec![json!(12)]), json!(467)]));
+        assert_eq!(
+            decode_bencoded_value("l3:abci467ee".as_bytes()),
+            (BencodeValue::List(vec![(BencodeValue::String("abc".to_string()), "3:abc".as_bytes()), (BencodeValue::Integer(467), "i467e".as_bytes())]), "".as_bytes(), "l3:abci467ee".as_bytes())
+        );
     }
 
     #[test]
     fn decode_dicts() {
-        assert_eq!(decode_bencoded_value("d3:abci467ee".as_bytes()), serde_json::to_value(&BTreeMap::from([("abc", json!(467))])).unwrap());
+        assert_eq!(
+            decode_bencoded_value("d3:abci467ee".as_bytes()),
+            (BencodeValue::Dict(BTreeMap::from([("abc".to_string(), (BencodeValue::Integer(467), "i467e".as_bytes()))])), "".as_bytes(), "d3:abci467ee".as_bytes())
+        );
     }
 
 }
