@@ -96,7 +96,7 @@ fn decode_bencoded_value(encoded_value: &[u8]) -> (BencodeValue<'_>, &[u8], &[u8
                 })
                 .expect("Invalid bencoded integer")
         },
-        b'0' .. b'9' => {
+        b'0' ..= b'9' => {
             encoded_value
                 .iter()
                 .position(|x| *x == b':')
