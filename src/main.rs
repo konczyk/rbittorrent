@@ -144,10 +144,17 @@ fn main() -> io::Result<()> {
                                 if let Some((BencodeValue::Integer(length), _)) = i.get("length") {
                                     println!("Length: {length}");
                                 }
+                                let mut hasher = Sha1::new();
+                                hasher.update(r);
+                                println!("Info Hash: {:x}", hasher.finalize());
+                                if let Some((BencodeValue::Integer(length), _)) = i.get("piece length") {
+                                    println!("Piece Length: {length}");
+                                }
+                                if let Some((BencodeValue::Binary(pieces), _)) = i.get("pieces") {
+                                    println!("Piece Hashes:");
+                                    pieces.chunks(20).map(|x| hex::encode(x)).for_each(|x| println!("{x}"));
+                                }
                             }
-                            let mut hasher = Sha1::new();
-                            hasher.update(r);
-                            println!("Info Hash: {:x}", hasher.finalize());
                         }
                     }
                     Ok(())
