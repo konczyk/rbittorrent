@@ -6,7 +6,7 @@ Simple bittorrent client
 
 Build project
 ```shell
-cargo build
+cargo build -r
 ```
 
 Run tests
@@ -16,7 +16,7 @@ cargo test
 
 Execute
 ```shell
-$ ./target/debug/rbittorrent -h
+$ ./target/release/rbittorrent -h
 Usage: rbittorrent <COMMAND> <VALUE>
 
 Arguments:
@@ -31,13 +31,13 @@ Options:
 
 Decode bencoded value
 ```shell
-./target/debug/rbittorrent decode d4:key1li78ei-873ee4:key25:valuee
+$ ./target/release/rbittorrent decode d4:key1li78ei-873ee4:key25:valuee
 {"key1":[78,-873],"key2":"value"}
 ```
 
 Display torrent info
 ```shell
-./target/debug/rbittorrent info data/ubuntu.torrent
+$ ./target/release/rbittorrent info data/ubuntu.torrent
 Tracker URL: https://torrent.ubuntu.com/announce
 Length: 5702520832
 Info Hash: c8295ce630f2064f08440db1534e4992cfe4862a
