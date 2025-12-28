@@ -51,3 +51,9 @@ c3ce98dc99225b07f535710d6b8c5058c387ae4e
 ed422cd04ac921b7730a22e84fe74fb34cf58d0f
 [...]
 ```
+
+Discover peers
+```shell
+$ ./target/release/rbittorrent peers data/ubuntu.torrent
+185.125.190.59:6881
+```

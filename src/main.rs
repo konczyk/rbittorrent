@@ -1,15 +1,18 @@
 mod bencode;
 
+use bencode::{decode_bencoded_value, BencodeNode, BencodeValue};
 use clap::{Parser, ValueEnum};
+use reqwest::blocking;
 use sha1::{Digest, Sha1};
 use std::{fs, io};
-use bencode::{decode_bencoded_value, BencodeNode, BencodeValue};
+use std::net::Ipv4Addr;
 
 #[derive(Debug, Clone, ValueEnum)]
 #[value(rename_all = "lowercase")]
 enum Command {
     Decode,
     Info,
+    Peers,
 }
 
 #[derive(Parser, Debug)]
@@ -42,7 +45,7 @@ fn main() -> io::Result<()> {
                 .and_then(|cnt| {
                     let (node, _) = decode_bencoded_value(cnt.as_slice());
                     if let BencodeValue::Dict(d) = node.value {
-                        if let Some(BencodeNode { value: BencodeValue::String(url), raw: _}) = d.get("announce") {
+                        if let Some(BencodeNode { value: BencodeValue::String(url), raw: _ }) = d.get("announce") {
                             println!("Tracker URL: {url}");
                         }
                         if let Some(node) = d.get("info") {
@@ -66,5 +69,44 @@ fn main() -> io::Result<()> {
                     Ok(())
                 })
         },
+        Command::Peers => {
+            fs::read(args.value)
+                .and_then(|cnt| {
+                    let (node, _) = decode_bencoded_value(cnt.as_slice());
+                    if let BencodeValue::Dict(d) = node.value {
+                        if let Some(BencodeNode { value: BencodeValue::String(url), raw: _ }) = d.get("announce") {
+                            if let Some(node) = d.get("info") {
+                                if let BencodeValue::Dict(i) = &node.value {
+                                    let mut hasher = Sha1::new();
+                                    hasher.update(node.raw);
+                                    let info_hash = hasher.finalize().iter().map(|b| format!("%{:02x}", b)).collect::<String>();
+                                    let peer_id = "xwgeweorwehnrot34t29";
+                                    if let Some(BencodeNode { value: BencodeValue::Integer(length), raw: _ }) = i.get("piece length") {
+                                        let body = blocking::get(
+                                            format!("{url}?info_hash={info_hash}&peer_id={peer_id}&port=6881&uploaded=0&downloaded=0&left={length}&compact=1")
+                                        ).and_then(|result| result.bytes());
+                                        match body {
+                                            Ok(b) => {
+                                                let (node, _) = decode_bencoded_value(b.iter().as_slice());
+                                                if let BencodeValue::Dict(d) = node.value {
+                                                    if let Some(BencodeNode { value: BencodeValue::Binary(peers), raw: _ }) = d.get("peers") {
+                                                        peers.chunks(6).for_each(|c| {
+                                                            let ip = Ipv4Addr::new(c[0], c[1], c[2], c[3]);
+                                                            let port = ((c[4] as u16) << 8) | c[5] as u16;
+                                                            println!("{ip}:{port}")
+                                                        });
+                                                    }
+                                                }
+                                            },
+                                            Err(e) => eprintln!("An error occured {}", e),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                })
+        }
     }
 }
