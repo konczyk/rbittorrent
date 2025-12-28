@@ -20,7 +20,7 @@ $ ./target/release/rbittorrent -h
 Usage: rbittorrent <COMMAND> <VALUE>
 
 Arguments:
-  <COMMAND>  Name of the command [possible values: decode, info]
+  <COMMAND>  Name of the command [possible values: decode, info, peers]
   <VALUE>    Value to process
 
 Options:
