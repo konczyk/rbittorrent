@@ -26,7 +26,7 @@ impl<'a> Torrent<'a> {
 
         let node_info = d.get("info").expect("Expected info");
         let mut hasher = Sha1::new();
-        hasher.update(node.raw);
+        hasher.update(node_info.raw);
         let info_hash = hasher.finalize();
 
         let info_dict = match &node_info.value {
@@ -45,7 +45,10 @@ impl<'a> Torrent<'a> {
         };
 
         let pieces = match info_dict.get("pieces") {
-            Some(BencodeNode { value: BencodeValue::Binary(_), raw }) => *raw,
+            Some(BencodeNode { value: BencodeValue::Binary(_), raw }) => {
+                let colon = (*raw).iter().position(|x| *x == b':').expect("Pieces are missing a colon");
+                &raw[colon+1..]
+            },
             _ => panic!("Torrent URL not found"),
         };
 

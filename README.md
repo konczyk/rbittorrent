@@ -17,11 +17,12 @@ cargo test
 Execute
 ```shell
 $ ./target/release/rbittorrent -h
-Usage: rbittorrent <COMMAND> <VALUE>
+Usage: rbittorrent <COMMAND> <VALUE> [PEER]
 
 Arguments:
-  <COMMAND>  Name of the command [possible values: decode, info, peers]
-  <VALUE>    Value to process
+  <COMMAND>  Name of the command [possible values: decode, info, peers, handshake]
+  <VALUE>    Value to decode or a torrent file
+  [PEER]     peer
 
 Options:
   -h, --help  Print help
@@ -55,5 +56,11 @@ ed422cd04ac921b7730a22e84fe74fb34cf58d0f
 Discover peers
 ```shell
 $ ./target/release/rbittorrent peers data/ubuntu.torrent
-185.125.190.59:6881
+185.125.190.59:6929
+```
+
+Send handshake
+```shell
+$ ./target/release/rbittorrent handshake data/ubuntu.torrent 185.125.190.59:6929
+Peer ID: 543033492d2d303233352d716372566271757a66
 ```
