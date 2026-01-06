@@ -1,12 +1,10 @@
 mod bencode;
 mod torrent;
 
-use bencode::{decode_bencoded_value, BencodeNode, BencodeValue};
+use bencode::decode_bencoded_value;
 use clap::{Parser, ValueEnum};
-use reqwest::blocking;
-use std::net::{Ipv4Addr, TcpStream};
+use std::net::TcpStream;
 use std::{fs, io};
-use std::io::{Read, Write};
 use torrent::Torrent;
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -42,41 +40,6 @@ struct Args {
     peer: Option<String>,
 }
 
-fn get_peers(peer_id: &str, torrent: &Torrent) -> Vec<(Ipv4Addr, u16)> {
-    let mut peers_list = Vec::new();
-    let info_hash = torrent.info_hash.iter().map(|b| format!("%{:02x}", b)).collect::<String>();
-    let body = blocking::get(
-        format!("{}?info_hash={info_hash}&peer_id={peer_id}&port=6881&uploaded=0&downloaded=0&left={}&compact=1", torrent.url, torrent.piece_length)
-    ).and_then(|result| result.bytes());
-    match body {
-        Ok(b) => {
-            let (node, _) = decode_bencoded_value(b.iter().as_slice());
-            if let BencodeValue::Dict(d) = node.value {
-                if let Some(BencodeNode { value: BencodeValue::Binary(peers), raw: _ }) = d.get("peers") {
-                    peers.chunks(6).for_each(|c| {
-                        peers_list.push((Ipv4Addr::new(c[0], c[1], c[2], c[3]), ((c[4] as u16) << 8) | c[5] as u16));
-                    });
-                }
-            }
-        },
-        Err(e) => eprintln!("An error occured {}", e),
-    }
-    peers_list
-}
-
-fn send_handshake(peer_id: &str, torrent: &Torrent, stream: &mut TcpStream) -> [u8; 68] {
-    let mut handshake: Vec<u8> = Vec::with_capacity(68);
-    handshake.push(19);
-    handshake.extend_from_slice(b"BitTorrent protocol");
-    handshake.extend_from_slice(&[0u8; 8]);
-    handshake.extend_from_slice(torrent.info_hash.as_slice());
-    handshake.extend_from_slice(peer_id.as_bytes());
-    stream.write_all(&handshake).expect("Error sending handshake");
-    let mut response = [0u8; 68];
-    stream.read_exact(&mut response).expect("Error reading handshake response");
-    response
-}
-
 fn main() -> io::Result<()> {
     let args = Args::parse();
     let peer_id = "xwgeweorwehnrot34t29";
@@ -103,10 +66,18 @@ fn main() -> io::Result<()> {
             fs::read(args.value)
                 .and_then(|cnt| {
                     let torrent = Torrent::new(cnt.as_slice());
-                    get_peers(peer_id, &torrent).iter().for_each(|(ip, port)| {
-                        println!("{ip}:{port}")
-                    });
-                    Ok(())
+                    match torrent.get_peers(peer_id) {
+                        Ok(v) => {
+                            v.iter().for_each(|(ip, port)| {
+                                println!("{ip}:{port}")
+                            });
+                            Ok(())
+                        },
+                        Err(e) => {
+                            eprintln!("An error occurred: {e}");
+                            Err(e)
+                        }
+                    }
                 })
         },
         Command::Handshake => {
@@ -116,8 +87,12 @@ fn main() -> io::Result<()> {
                     match args.peer {
                         Some(peer) => {
                             if let Ok(mut stream) = TcpStream::connect(&peer) {
-                                let response = send_handshake(peer_id, &torrent, &mut stream);
-                                println!("Peer ID: {}", hex::encode(&response[48..68]));
+                                match torrent.send_handshake(&mut stream, peer_id) {
+                                    Ok(response) => println!("Peer ID: {}", hex::encode(&response[48..68])),
+                                    Err(e) => {
+                                        eprintln!("An error occurred: {e}");
+                                    },
+                                }
                             } else {
                                 eprintln!("Couldn't connect to server...");
                             }
