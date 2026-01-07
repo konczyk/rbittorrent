@@ -17,24 +17,18 @@ cargo test
 Execute
 ```shell
 $ ./target/release/rbittorrent -h
-Usage: rbittorrent <COMMAND> <VALUE> [PEER]
+Usage: rbittorrent <COMMAND> <TORRENT_FILE> [OUTPUT_DIR]
 
 Arguments:
-  <COMMAND>  Name of the command [possible values: decode, info, peers, handshake]
-  <VALUE>    Value to decode or a torrent file
-  [PEER]     peer
+  <COMMAND>       Command name [possible values: info, download]
+  <TORRENT_FILE>  A torrent file
+  [OUTPUT_DIR]    Directory to save the file into
 
 Options:
   -h, --help  Print help
 ```
 
 ## Examples
-
-Decode bencoded value
-```shell
-$ ./target/release/rbittorrent decode d4:key1li78ei-873ee4:key25:valuee
-{"key1":[78,-873],"key2":"value"}
-```
 
 Display torrent info
 ```shell
@@ -51,16 +45,4 @@ c3ce98dc99225b07f535710d6b8c5058c387ae4e
 7de04dbf50b1361fa3a11d93e3e130ec37381695
 ed422cd04ac921b7730a22e84fe74fb34cf58d0f
 [...]
-```
-
-Discover peers
-```shell
-$ ./target/release/rbittorrent peers data/ubuntu.torrent
-185.125.190.59:6929
-```
-
-Send handshake
-```shell
-$ ./target/release/rbittorrent handshake data/ubuntu.torrent 185.125.190.59:6929
-Peer ID: 543033492d2d303233352d716372566271757a66
 ```
