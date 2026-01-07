@@ -18,6 +18,15 @@ impl PeerSession {
             .map(|&byte| (byte >> (7 - bit_index) & 1) != 0)
             .unwrap_or(false)
     }
+
+    pub fn update_have(&mut self, piece_index: usize) {
+        let byte_index = piece_index / 8;
+        let bit_index = piece_index % 8;
+        if byte_index > self.bitfield.len() {
+            self.bitfield.resize(byte_index + 1, 0);
+        }
+        self.bitfield[byte_index] |= 1 << (7 - bit_index);
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -173,6 +182,9 @@ impl<'a> Download<'a> {
                             let block_size = Self::calc_block_size(piece_length, received);
                             self.request_piece(stream, 13, 6, piece, 0, block_size)?;
                         },
+                        MessageId::Have => {
+                            peer_session.update_have(u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize);
+                        }
                         MessageId::Piece => {
                             let begin = u32::from_be_bytes(payload[4..8].try_into().unwrap());
                             let data = &payload[8..];
