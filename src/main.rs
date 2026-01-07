@@ -1,8 +1,10 @@
 mod torrent;
 
-use clap::{Parser, ValueEnum};
-use std::{fs, io};
+use crate::torrent::download::Download;
 use crate::torrent::torrent::Torrent;
+use clap::{Parser, ValueEnum};
+use std::path::Path;
+use std::{fs, io};
 
 #[derive(Debug, Clone, ValueEnum)]
 #[value(rename_all = "snake_case")]
@@ -25,16 +27,23 @@ struct Args {
     )]
     torrent_file: String,
 
+    /// Run in debug mode
+    #[arg(
+        short,
+        long
+    )]
+    debug: bool,
+
     /// Directory to save the file into
     #[arg(
-        required = false,
+        short,
+        long
     )]
     output_dir: Option<String>,
 }
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
-    let peer_id = "xwgeweorwehnrot34t29";
 
     match args.command {
         Command::Info => {
@@ -51,11 +60,20 @@ fn main() -> io::Result<()> {
                 })
         },
         Command::Download=> {
-            fs::read(args.torrent_file)
+            fs::read(&args.torrent_file)
                 .and_then(|cnt| {
                     let torrent = Torrent::new(cnt.as_slice());
-                    let peers = torrent.get_peers(peer_id);
-                    let pieces = torrent.count_pieces();
+                    let output_dir = args.output_dir.expect("Missing output dir flag");
+                    let output_file = Path::new(&args.torrent_file).file_stem().and_then(|x| x.to_str()).unwrap_or("output").to_string();
+                    let downloader = Download::new(&torrent, output_dir, output_file, args.debug);
+                    match downloader.download() {
+                        Ok(_) => (),
+                        Err(e) => {
+                            if args.debug {
+                                eprintln!("Torrent download failed: {e}");
+                            }
+                        }
+                    };
                     Ok(())
                 })
         },

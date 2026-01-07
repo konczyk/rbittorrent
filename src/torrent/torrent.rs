@@ -1,3 +1,4 @@
+use crate::torrent::bencode;
 use reqwest::blocking;
 use sha1::digest::core_api::CoreWrapper;
 use sha1::digest::Output;
@@ -5,7 +6,6 @@ use sha1::{Digest, Sha1, Sha1Core};
 use std::io;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpStream};
-use crate::torrent::bencode;
 
 pub struct Torrent<'a> {
     pub url: String,
@@ -75,9 +75,10 @@ impl<'a> Torrent<'a> {
                 }
             }
             peers_list
-        }).map_err(|e|
+        }).map_err(|e| {
+            eprintln!("{e}");
             io::Error::new(io::ErrorKind::Other, e.to_string())
-        )
+        })
     }
 
     pub fn send_handshake(&self, stream: &mut TcpStream, peer_id: &str) -> io::Result<[u8; 68]> {
@@ -95,6 +96,15 @@ impl<'a> Torrent<'a> {
 
     pub fn count_pieces(&self) -> u32 {
         (self.length as f64 / self.piece_length as f64).ceil() as u32
+    }
+
+    pub fn calc_piece_length(&self, piece: u32) -> u32 {
+        let pieces = self.count_pieces();
+        if piece <  pieces - 1 {
+            self.piece_length as u32
+        } else {
+            self.length as u32 - self.piece_length as u32 * (pieces - 1)
+        }
     }
 
 }

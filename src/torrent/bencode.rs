@@ -101,7 +101,7 @@ pub fn decode_bencoded_value(encoded_value: &[u8]) -> (BencodeNode<'_>, &[u8]) {
                 })
                 .expect("Invalid bencoded string")
         },
-        _ => panic!("Unhandled encoded value: {:?}", encoded_value),
+        _ => panic!("Unhandled encoded value: {:?}", str::from_utf8(encoded_value).unwrap()),
     };
 
     let consumed = encoded_value.len() - rest.len();
