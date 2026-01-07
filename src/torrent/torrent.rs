@@ -1,4 +1,3 @@
-use crate::bencode::{decode_bencoded_value, BencodeNode, BencodeValue};
 use reqwest::blocking;
 use sha1::digest::core_api::CoreWrapper;
 use sha1::digest::Output;
@@ -6,6 +5,7 @@ use sha1::{Digest, Sha1, Sha1Core};
 use std::io;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpStream};
+use crate::torrent::bencode;
 
 pub struct Torrent<'a> {
     pub url: String,
@@ -17,14 +17,14 @@ pub struct Torrent<'a> {
 
 impl<'a> Torrent<'a> {
     pub fn new(data: &'a [u8]) -> Torrent<'a> {
-        let (node, _) = decode_bencoded_value(data);
+        let (node, _) = bencode::decode_bencoded_value(data);
         let d = match &node.value {
-            BencodeValue::Dict(d) => d,
+            bencode::BencodeValue::Dict(d) => d,
             _ => panic!("Expected dictionary")
         };
 
         let url = match d.get("announce") {
-            Some(BencodeNode { value: BencodeValue::String(url), raw: _ }) => url.clone(),
+            Some(bencode::BencodeNode { value: bencode::BencodeValue::String(url), raw: _ }) => url.clone(),
             _ => panic!("Torrent URL not found"),
         };
 
@@ -34,22 +34,22 @@ impl<'a> Torrent<'a> {
         let info_hash = hasher.finalize();
 
         let info_dict = match &node_info.value {
-            BencodeValue::Dict(d) => d,
+            bencode::BencodeValue::Dict(d) => d,
             _ => panic!("Expected dictionary")
         };
 
         let length = match info_dict.get("length") {
-            Some(BencodeNode { value: BencodeValue::Integer(len), raw: _ }) => *len,
+            Some(bencode::BencodeNode { value: bencode::BencodeValue::Integer(len), raw: _ }) => *len,
             _ => panic!("Torrent URL not found"),
         };
 
         let piece_length = match info_dict.get("piece length") {
-            Some(BencodeNode { value: BencodeValue::Integer(len), raw: _ }) => *len,
+            Some(bencode::BencodeNode { value: bencode::BencodeValue::Integer(len), raw: _ }) => *len,
             _ => panic!("Torrent URL not found"),
         };
 
         let pieces = match info_dict.get("pieces") {
-            Some(BencodeNode { value: BencodeValue::Binary(_), raw }) => {
+            Some(bencode::BencodeNode { value: bencode::BencodeValue::Binary(_), raw }) => {
                 let colon = (*raw).iter().position(|x| *x == b':').expect("Pieces are missing a colon");
                 &raw[colon+1..]
             },
@@ -66,9 +66,9 @@ impl<'a> Torrent<'a> {
             format!("{}?info_hash={info_hash}&peer_id={peer_id}&port=6881&uploaded=0&downloaded=0&left={}&compact=1", self.url, self.piece_length)
         ).and_then(|result| result.bytes());
         body.map(|b| {
-            let (node, _) = decode_bencoded_value(b.iter().as_slice());
-            if let BencodeValue::Dict(d) = node.value {
-                if let Some(BencodeNode { value: BencodeValue::Binary(peers), raw: _ }) = d.get("peers") {
+            let (node, _) = bencode::decode_bencoded_value(b.iter().as_slice());
+            if let bencode::BencodeValue::Dict(d) = node.value {
+                if let Some(bencode::BencodeNode { value: bencode::BencodeValue::Binary(peers), raw: _ }) = d.get("peers") {
                     peers.chunks(6).for_each(|c| {
                         peers_list.push((Ipv4Addr::new(c[0], c[1], c[2], c[3]), ((c[4] as u16) << 8) | c[5] as u16));
                     });
@@ -91,6 +91,10 @@ impl<'a> Torrent<'a> {
         let mut response = [0u8; 68];
         stream.read_exact(&mut response)?;
         Ok(response)
+    }
+
+    pub fn count_pieces(&self) -> u32 {
+        (self.length as f64 / self.piece_length as f64).ceil() as u32
     }
 
 }

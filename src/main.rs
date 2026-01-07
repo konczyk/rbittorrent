@@ -1,11 +1,8 @@
-mod bencode;
 mod torrent;
 
-use bencode::decode_bencoded_value;
 use clap::{Parser, ValueEnum};
-use std::net::TcpStream;
 use std::{fs, io};
-use torrent::Torrent;
+use crate::torrent::torrent::Torrent;
 
 #[derive(Debug, Clone, ValueEnum)]
 #[value(rename_all = "snake_case")]
@@ -56,6 +53,9 @@ fn main() -> io::Result<()> {
         Command::Download=> {
             fs::read(args.torrent_file)
                 .and_then(|cnt| {
+                    let torrent = Torrent::new(cnt.as_slice());
+                    let peers = torrent.get_peers(peer_id);
+                    let pieces = torrent.count_pieces();
                     Ok(())
                 })
         },
