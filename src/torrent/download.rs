@@ -2,9 +2,9 @@ use crate::torrent::torrent;
 use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub struct PeerSession {
     pub bitfield: Vec<u8>,
@@ -223,6 +223,11 @@ impl<'a> Download<'a> {
     }
 
     pub fn download(&self) -> io::Result<()> {
+        let start_time = Instant::now();
+        let final_path = format!("{}/{}", &self.output_dir, &self.output_file);
+        let mut output_file = File::create(&final_path)?;
+        output_file.set_len(self.torrent.length as u64)?;
+
         let peers = self.torrent.get_peers(self.peer_id)?;
         let pieces = self.torrent.count_pieces();
         let mut completed = vec![false; pieces as usize];
@@ -258,11 +263,13 @@ impl<'a> Download<'a> {
                     }
                     match self.download_piece(&mut stream, piece_index, &mut peer_session) {
                         Ok(bytes) => {
-                            let mut dst = File::create(format!("{}/{}.{}", &self.output_dir, &self.output_file, piece_index))?;
-                            dst.write_all(&bytes)?;
                             if self.verify_piece(piece_index as usize, &bytes) {
+                                let offset = (piece_index as u64) * (self.torrent.piece_length as u64);
+                                output_file.seek(SeekFrom::Start(offset))?;
+                                output_file.write_all(&bytes)?;
+
                                 completed[piece_index as usize] = true;
-                                println!("Completed piece {}/{pieces} ({} bytes)",  piece_index + 1, bytes.len());
+                                self.print_progress(&completed, start_time);
                             } else {
                                 self.debug(format!("SHA1 check failed for piece {}", piece_index).as_str());
                             }
@@ -279,17 +286,52 @@ impl<'a> Download<'a> {
         }
 
         if completed.iter().all(|x| *x) {
-            let dst = File::create(format!("{}/{}", &self.output_dir, &self.output_file))?;
-            let mut writer = BufWriter::new(dst);
-            for piece_index in 0..pieces {
-                let src = File::open(format!("{}/{}.{}", &self.output_dir, &self.output_file, piece_index))?;
-                let mut reader = BufReader::new(src);
-                io::copy(&mut reader, &mut writer)?;
-            }
-            writer.flush()?;
+            self.debug("\nDownload finished");
         } else {
-           self.debug(format!("Download finished with {} pieces missing", completed.iter().filter(|x| **x == false).count()).as_str());
+            self.debug(format!("\nDownload finished with {} pieces missing", completed.iter().filter(|x| **x == false).count()).as_str());
         }
         Ok(())
+    }
+
+    fn print_progress(&self, completed: &[bool], start_time: Instant) {
+        let pieces_count = completed.len();
+        let completed_count = completed.iter().filter(|x| **x).count();
+
+        let bytes_done = completed.iter().enumerate()
+            .filter(|(_, done)| **done)
+            .map(|(piece, _)| self.torrent.calc_piece_length(piece as u32))
+            .sum::<u32>();
+        let bytes_total = self.torrent.length as u64;
+        let elapsed = start_time.elapsed().as_secs_f64();
+
+        let speed = if elapsed > 0.0 {
+            (bytes_done as f64 / (1024.0 * 1024.0)) / elapsed
+        } else {
+            0.0
+        };
+
+        let eta = if speed > 0.0 {
+            let remaining_mb = (bytes_total - bytes_done as u64) as f64 / (1024.0 * 1024.0);
+            remaining_mb / speed
+        } else {
+            0.0
+        };
+
+        let percent = (bytes_done as f64 / bytes_total as f64) * 100.0;
+        let bar_width = 25;
+        let filled = ((percent / 100.0) * bar_width as f64) as usize;
+        let empty = bar_width - filled;
+
+        print!(
+            "\r[{}{}] {:>6.2}% | {:>7.2} MB/s | ETA: {:>3.0}s | {}/{} pieces",
+            "=".repeat(filled),
+            " ".repeat(empty),
+            percent,
+            speed,
+            eta,
+            completed_count,
+            pieces_count
+        );
+        let _ = io::stdout().flush();
     }
 }

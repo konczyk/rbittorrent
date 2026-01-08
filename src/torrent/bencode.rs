@@ -1,17 +1,10 @@
 use std::collections::BTreeMap;
 use std::iter::from_fn;
-use serde_json::Value;
 
 #[derive(Debug, PartialEq)]
 pub struct BencodeNode<'a> {
     pub value: BencodeValue<'a>,
     pub raw: &'a [u8]
-}
-
-impl BencodeNode<'_> {
-    pub fn to_json(self) -> Value {
-        self.value.to_json()
-    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -21,18 +14,6 @@ pub enum BencodeValue<'a> {
     Integer(isize),
     List(Vec<BencodeNode<'a>>),
     Dict(BTreeMap<String, BencodeNode<'a>>),
-}
-
-impl BencodeValue<'_> {
-    pub fn to_json(self) -> Value {
-        match self {
-            BencodeValue::String(s) => s.into(),
-            BencodeValue::Integer(n) => n.into(),
-            BencodeValue::Binary(b) => hex::encode(b).into(),
-            BencodeValue::List(l) => l.into_iter().map(|x| x.to_json()).collect::<Vec<Value>>().into(),
-            BencodeValue::Dict(d) => Value::Object(d.into_iter().map(|(k, v)| (k, v.to_json())).collect::<serde_json::Map<String, Value>>())
-        }
-    }
 }
 
 pub fn decode_bencoded_value(encoded_value: &[u8]) -> (BencodeNode<'_>, &[u8]) {
@@ -113,8 +94,8 @@ pub fn decode_bencoded_value(encoded_value: &[u8]) -> (BencodeNode<'_>, &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn handle_strings() {

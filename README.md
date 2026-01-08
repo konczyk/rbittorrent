@@ -17,32 +17,38 @@ cargo test
 Execute
 ```shell
 $ ./target/release/rbittorrent -h
-Usage: rbittorrent <COMMAND> <TORRENT_FILE> [OUTPUT_DIR]
+Usage: rbittorrent [OPTIONS] <COMMAND> <TORRENT_FILE>
 
 Arguments:
   <COMMAND>       Command name [possible values: info, download]
   <TORRENT_FILE>  A torrent file
-  [OUTPUT_DIR]    Directory to save the file into
 
 Options:
-  -h, --help  Print help
+  -d, --debug                    Run in debug mode
+  -o, --output-dir <OUTPUT_DIR>  Directory to save the file into
+  -h, --help                     Print help
 ```
 
 ## Examples
 
 Display torrent info
 ```shell
-$ ./target/release/rbittorrent info data/ubuntu.torrent
-Tracker URL: https://torrent.ubuntu.com/announce
-Length: 5702520832
-Info Hash: c8295ce630f2064f08440db1534e4992cfe4862a
+$ ./target/release/rbittorrent info data/debian.torrent
+Tracker URL: http://bttracker.debian.org:6969/announce
+Length: 822083584
+Info Hash: b2387d1a5eb488b8b60ed1eebec698fa20dfac34
 Piece Length: 262144
 Piece Hashes:
-555bb58fab9093efced0b48e0058d03ee91d1770
-397be5eb6241f1d7a35196af264737881742b090
-c4d19aaf32910a792cbd3e4c4b165e531423f77b
-c3ce98dc99225b07f535710d6b8c5058c387ae4e
-7de04dbf50b1361fa3a11d93e3e130ec37381695
-ed422cd04ac921b7730a22e84fe74fb34cf58d0f
+e5d037b6007e42490df1e6949c461bc9dd13c715
+c27059fc817c8354d30e559a2ebd6f55aace5a15
+af7142ba25677a57d777dcf75b16ba74c26467a2
+287391747a176df9ce3f83a79b3a0d6fcf915103
+b7ab11d25a5e3fa8809f5ef2398b3871a2158f19
 [...]
+```
+
+Download torrent
+```shell
+$ ./target/release/rbittorrent -o /tmp download data/debian.torrent
+[                         ]   3.41% |    0.04 MB/s | ETA: 17848s | 107/3136 pieces
 ```

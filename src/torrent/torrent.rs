@@ -160,7 +160,6 @@ impl<'a> Torrent<'a> {
         let addr = self.url.strip_prefix("udp://")
             .and_then(|u| u.split("/").next())
             .unwrap_or(&self.url);
-        println!("{addr}");
         if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
             socket.set_read_timeout(Some(Duration::from_secs(5)))?;
             socket.connect(&addr)?;
