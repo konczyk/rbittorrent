@@ -94,7 +94,6 @@ pub fn decode_bencoded_value(encoded_value: &[u8]) -> (BencodeNode<'_>, &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use std::collections::BTreeMap;
 
     #[test]
@@ -103,7 +102,6 @@ mod tests {
             decode_bencoded_value("3:abc".as_bytes()),
             (BencodeNode { value: BencodeValue::String("abc".to_string()), raw: "3:abc".as_bytes() }, "".as_bytes())
         );
-        assert_eq!(BencodeValue::String("abc".to_string()).to_json(), json!("abc"))
     }
 
     #[test]
@@ -116,8 +114,6 @@ mod tests {
             decode_bencoded_value("i-467e".as_bytes()),
             (BencodeNode { value: BencodeValue::Integer(-467), raw: "i-467e".as_bytes()}, "".as_bytes())
         );
-        assert_eq!(BencodeValue::Integer(467).to_json(), json!(467));
-        assert_eq!(BencodeValue::Integer(-467).to_json(), json!(-467));
     }
 
     #[test]
