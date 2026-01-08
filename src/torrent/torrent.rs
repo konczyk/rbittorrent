@@ -4,8 +4,10 @@ use sha1::digest::core_api::CoreWrapper;
 use sha1::digest::Output;
 use sha1::{Digest, Sha1, Sha1Core};
 use std::io;
+use std::io::ErrorKind::{InvalidData, TimedOut, WouldBlock};
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpStream};
+use std::net::{Ipv4Addr, TcpStream, UdpSocket};
+use std::time::Duration;
 
 pub struct Torrent<'a> {
     pub url: String,
@@ -60,10 +62,119 @@ impl<'a> Torrent<'a> {
     }
 
     pub fn get_peers(&self, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
+        if self.url.starts_with("http") {
+            self.get_peers_by_http(peer_id)
+        } else if self.url.starts_with("udp") {
+            self.get_peers_by_udp(peer_id)
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, format!("Unrecognized URL: {}", self.url)))
+        }
+    }
+
+    fn get_udp_conn_id(socket: &UdpSocket, tid: u32) -> io::Result<u64> {
+        let mut req = [0u8; 16];
+        req[0..8].copy_from_slice(&0x41727101980u64.to_be_bytes().as_slice());
+        req[8..12].copy_from_slice(&0u32.to_be_bytes().as_slice());
+        req[12..16].copy_from_slice(&tid.to_be_bytes().as_slice());
+
+        for _ in 0..5 {
+            socket.send(req.as_slice())?;
+
+            let mut res = [0u8; 16];
+            match socket.recv(&mut res) {
+                Ok(bytes) if bytes == 16 => {
+                    if u32::from_be_bytes(res[0..4].try_into().unwrap()) == 0 &&
+                        u32::from_be_bytes(res[4..8].try_into().unwrap()) == tid
+                    {
+                        return Ok(u64::from_be_bytes(res[8..16].try_into().unwrap()));
+                    } else {
+                        continue
+                    }
+                },
+                Ok(_) => continue,
+                Err(e) => {
+                    if e.kind() == TimedOut || e.kind() == WouldBlock {
+                        continue;
+                    } else {
+                        return Err(e)
+                    }
+                }
+            }
+        }
+        Err(io::Error::new(TimedOut, "Tracker unreachable during conn_id fetching"))
+    }
+
+    fn get_udp_peers(&self, socket: &UdpSocket, conn_id: u64, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
+        let mut peers_list = Vec::new();
+        let tid = rand::random::<u32>();
+        let key = rand::random::<u32>();
+        let mut msg = [0u8; 98];
+
+        msg[0..8].copy_from_slice(&conn_id.to_be_bytes());
+        msg[8..12].copy_from_slice(&1u32.to_be_bytes());
+        msg[12..16].copy_from_slice(&tid.to_be_bytes());
+        msg[16..36].copy_from_slice(&self.info_hash.as_slice());
+        msg[36..56].copy_from_slice(peer_id.as_bytes());
+        msg[56..64].copy_from_slice(&0u64.to_be_bytes());
+        msg[64..72].copy_from_slice(&(self.length as u64).to_be_bytes());
+        msg[72..80].copy_from_slice(&0u64.to_be_bytes());
+        msg[80..84].copy_from_slice(&2u32.to_be_bytes());
+        msg[84..88].copy_from_slice(&0u32.to_be_bytes());
+        msg[88..92].copy_from_slice(&key.to_be_bytes());
+        msg[92..96].copy_from_slice(&(-1i32).to_be_bytes());
+        msg[96..98].copy_from_slice(&6881u16.to_be_bytes());
+
+        for _ in 0..5 {
+            socket.send(msg.as_slice())?;
+
+            let mut res = [0u8; 1024];
+            match socket.recv(&mut res) {
+                Ok(bytes) => {
+                    let action = u32::from_be_bytes(res[0..4].try_into().unwrap());
+                    let rtid = u32::from_be_bytes(res[4..8].try_into().unwrap());
+                    if action == 1 && rtid == tid {
+                        let _ = &res[20..bytes].chunks_exact(6).for_each(|c| {
+                            peers_list.push((Ipv4Addr::new(c[0], c[1], c[2], c[3]), u16::from_be_bytes(c[4..6].try_into().unwrap())))
+                        });
+                        return Ok(peers_list)
+                    } else if action == 3 && rtid == tid {
+                        return Err(io::Error::new(InvalidData, "Tracker returned action 3"))
+                    } else {
+                        continue
+                    }
+                },
+                Err(e) => {
+                    if e.kind() == TimedOut || e.kind() == WouldBlock {
+                        continue;
+                    } else {
+                        return Err(e)
+                    }
+                }
+            }
+        }
+        Err(io::Error::new(TimedOut, "Tracker unreachable during peer fetching"))
+    }
+
+    fn get_peers_by_udp(&self, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
+        let tid = rand::random::<u32>();
+        let addr = self.url.strip_prefix("udp://")
+            .and_then(|u| u.split("/").next())
+            .unwrap_or(&self.url);
+        println!("{addr}");
+        if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+            socket.set_read_timeout(Some(Duration::from_secs(5)))?;
+            socket.connect(&addr)?;
+            let conn_id = Self::get_udp_conn_id(&socket, tid)?;
+            return self.get_udp_peers(&socket, conn_id, peer_id)
+        }
+        Ok(vec![])
+    }
+
+    fn get_peers_by_http(&self, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
         let mut peers_list = Vec::new();
         let info_hash = self.info_hash.iter().map(|b| format!("%{:02x}", b)).collect::<String>();
         let body = blocking::get(
-            format!("{}?info_hash={info_hash}&peer_id={peer_id}&port=6881&uploaded=0&downloaded=0&left={}&compact=1", self.url, self.piece_length)
+            format!("{}?info_hash={info_hash}&peer_id={peer_id}&port=6881&uploaded=0&downloaded=0&left={}&compact=1", self.url, self.length)
         ).and_then(|result| result.bytes());
         body.map(|b| {
             let (node, _) = bencode::decode_bencoded_value(b.iter().as_slice());
@@ -76,7 +187,6 @@ impl<'a> Torrent<'a> {
             }
             peers_list
         }).map_err(|e| {
-            eprintln!("{e}");
             io::Error::new(io::ErrorKind::Other, e.to_string())
         })
     }
