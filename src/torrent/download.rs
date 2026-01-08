@@ -1,4 +1,5 @@
 use crate::torrent::torrent;
+use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io;
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -144,7 +145,7 @@ impl<'a> Download<'a> {
         msg.extend_from_slice(&length.to_be_bytes());
         stream.write_all(msg.as_slice())?;
 
-        self.debug(format!("Wrote messages len {len}, id {id}, index {index}, begin: {begin}, length: {length}").as_str());
+        self.debug(format!("Sent message len {len}, id {id}, index {index}, begin: {begin}, length: {length}").as_str());
         Ok(())
     }
 
@@ -154,6 +155,18 @@ impl<'a> Download<'a> {
         } else {
             piece_length - received
         }
+    }
+
+    pub fn verify_piece(&self, index: usize, data: &[u8]) -> bool {
+        let start = index * 20;
+        let end = (index + 1) * 20;
+        let expected = &self.torrent.pieces[start..end];
+
+        let mut hasher = Sha1::new();
+        hasher.update(data);
+        let actual = hasher.finalize();
+
+        expected == actual.as_slice()
     }
 
     fn download_piece(&self, stream: &mut TcpStream, piece: u32, peer_session: &mut PeerSession) -> io::Result<Vec<u8>> {
@@ -171,7 +184,7 @@ impl<'a> Download<'a> {
             self.debug(format!("Waiting for message... (Piece {}, Received {})", piece, received).as_str());
             match self.read_message(stream) {
                 Ok((len, Some(id), payload)) => {
-                    self.debug(format!("Read messages len {len}, id {:?}, payload size {}", id, payload.len()).as_str());
+                    self.debug(format!("Read message len {len}, id {:?}, payload size {}", id, payload.len()).as_str());
                     match id {
                         MessageId::Choke => {
                             peer_session.choked = true;
@@ -247,8 +260,12 @@ impl<'a> Download<'a> {
                         Ok(bytes) => {
                             let mut dst = File::create(format!("{}/{}.{}", &self.output_dir, &self.output_file, piece_index))?;
                             dst.write_all(&bytes)?;
-                            completed[piece_index as usize] = true;
-                            println!("Completed piece {piece_index}/{pieces} ({} bytes)", bytes.len());
+                            if self.verify_piece(piece_index as usize, &bytes) {
+                                completed[piece_index as usize] = true;
+                                println!("Completed piece {}/{pieces} ({} bytes)",  piece_index + 1, bytes.len());
+                            } else {
+                                self.debug(format!("SHA1 check failed for piece {}", piece_index).as_str());
+                            }
                             continue
                         },
                         Err(_) => continue,
@@ -256,14 +273,16 @@ impl<'a> Download<'a> {
                 }
 
             }
+            if completed.iter().all(|x| *x) {
+                break;
+            }
         }
 
         if completed.iter().all(|x| *x) {
             let dst = File::create(format!("{}/{}", &self.output_dir, &self.output_file))?;
-
             let mut writer = BufWriter::new(dst);
             for piece_index in 0..pieces {
-                let src = File::create(format!("{}/{}.{}", &self.output_dir, &self.output_file, piece_index))?;
+                let src = File::open(format!("{}/{}.{}", &self.output_dir, &self.output_file, piece_index))?;
                 let mut reader = BufReader::new(src);
                 io::copy(&mut reader, &mut writer)?;
             }
