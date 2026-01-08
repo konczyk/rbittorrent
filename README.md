@@ -4,17 +4,17 @@ Simple bittorrent client
 
 ## Usage
 
-Build project
+Build
 ```shell
-cargo build -r
+$ cargo build -r
 ```
 
-Run tests
+Test
 ```shell
-cargo test
+$ cargo test
 ```
 
-Execute
+Run
 ```shell
 $ ./target/release/rbittorrent -h
 Usage: rbittorrent [OPTIONS] <COMMAND> <TORRENT_FILE>
