@@ -30,8 +30,6 @@ cargo run -- -h
 
 ## Examples
 
-## Examples
-
 Display torrent info
 ```shell
 $ cargo run -- info data/debian.torrent
