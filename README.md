@@ -1,39 +1,40 @@
 # RBittorrent
 
-Simple bittorrent client 
+A minimal BitTorrent client for downloading .torrent files via the command line.
 
-## Usage
+## Features
+- Parses .torrent files (bencode decoding, info hash calculation).
+- Supports HTTP and UDP trackers to fetch peers.
+- Connects to peers, performs handshake, and manages choke/unchoke messages.
+- Downloads pieces with SHA1 verification for data integrity.
+- Shows real-time progress: completion %, download speed, ETA, and piece count.
 
-Build
+## Notes
+- Only supports single-file torrents.
+- Default peer port is 6881.
+
+## Testing
 ```shell
-$ cargo build -r
+cargo test 
 ```
 
-Test
+## Running
 ```shell
-$ cargo test
+cargo run
 ```
 
-Run
+Options
 ```shell
-$ ./target/release/rbittorrent -h
-Usage: rbittorrent [OPTIONS] <COMMAND> <TORRENT_FILE>
-
-Arguments:
-  <COMMAND>       Command name [possible values: info, download]
-  <TORRENT_FILE>  A torrent file
-
-Options:
-  -d, --debug                    Run in debug mode
-  -o, --output-dir <OUTPUT_DIR>  Directory to save the file into
-  -h, --help                     Print help
+cargo run -- -h
 ```
+
+## Examples
 
 ## Examples
 
 Display torrent info
 ```shell
-$ ./target/release/rbittorrent info data/debian.torrent
+$ cargo run -- info data/debian.torrent
 Tracker URL: http://bttracker.debian.org:6969/announce
 Length: 822083584
 Info Hash: b2387d1a5eb488b8b60ed1eebec698fa20dfac34
@@ -49,6 +50,6 @@ b7ab11d25a5e3fa8809f5ef2398b3871a2158f19
 
 Download torrent
 ```shell
-$ ./target/release/rbittorrent -o /tmp download data/debian.torrent
+$ cargo run -- -o /tmp download data/debian.torrent
 [                         ]   3.41% |    0.04 MB/s | ETA: 17848s | 107/3136 pieces
 ```
