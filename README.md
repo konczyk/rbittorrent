@@ -49,5 +49,5 @@ b7ab11d25a5e3fa8809f5ef2398b3871a2158f19
 Download torrent
 ```shell
 $ cargo run -- -o /tmp download data/debian.torrent
-[                         ]   3.41% |    0.04 MB/s | ETA: 17848s | 107/3136 pieces
+⠠ [00:01:51] [>---------------------------------------] 18.25 MiB/784.00 MiB (66m) Piece 75/3136
 ```

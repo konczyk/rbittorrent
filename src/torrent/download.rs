@@ -1,10 +1,11 @@
 use crate::torrent::torrent;
+use indicatif::{ProgressBar, ProgressStyle};
 use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub struct PeerSession {
     pub bitfield: Vec<u8>,
@@ -223,7 +224,6 @@ impl<'a> Download<'a> {
     }
 
     pub fn download(&self) -> io::Result<()> {
-        let start_time = Instant::now();
         let final_path = format!("{}/{}", &self.output_dir, &self.output_file);
         let mut output_file = File::create(&final_path)?;
         output_file.set_len(self.torrent.length as u64)?;
@@ -231,6 +231,12 @@ impl<'a> Download<'a> {
         let peers = self.torrent.get_peers(self.peer_id)?;
         let pieces = self.torrent.count_pieces();
         let mut completed = vec![false; pieces as usize];
+
+        let pb = ProgressBar::new(self.torrent.length as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
+            .unwrap()
+            .progress_chars("#>-"));
 
         for peer in &peers {
             self.debug(format!("Connecting to peer {}", peer.0).as_str());
@@ -269,7 +275,8 @@ impl<'a> Download<'a> {
                                 output_file.write_all(&bytes)?;
 
                                 completed[piece_index as usize] = true;
-                                self.print_progress(&completed, start_time);
+                                pb.inc(bytes.len() as u64); // Automatically updates speed and ETA
+                                pb.set_message(format!("Piece {}/{}", piece_index + 1, pieces));
                             } else {
                                 self.debug(format!("SHA1 check failed for piece {}", piece_index).as_str());
                             }
@@ -290,48 +297,7 @@ impl<'a> Download<'a> {
         } else {
             self.debug(format!("\nDownload finished with {} pieces missing", completed.iter().filter(|x| **x == false).count()).as_str());
         }
+        pb.finish_with_message("Download Complete");
         Ok(())
-    }
-
-    fn print_progress(&self, completed: &[bool], start_time: Instant) {
-        let pieces_count = completed.len();
-        let completed_count = completed.iter().filter(|x| **x).count();
-
-        let bytes_done = completed.iter().enumerate()
-            .filter(|(_, done)| **done)
-            .map(|(piece, _)| self.torrent.calc_piece_length(piece as u32))
-            .sum::<u32>();
-        let bytes_total = self.torrent.length as u64;
-        let elapsed = start_time.elapsed().as_secs_f64();
-
-        let speed = if elapsed > 0.0 {
-            (bytes_done as f64 / (1024.0 * 1024.0)) / elapsed
-        } else {
-            0.0
-        };
-
-        let eta = if speed > 0.0 {
-            let remaining_mb = (bytes_total - bytes_done as u64) as f64 / (1024.0 * 1024.0);
-            remaining_mb / speed
-        } else {
-            0.0
-        };
-
-        let percent = (bytes_done as f64 / bytes_total as f64) * 100.0;
-        let bar_width = 25;
-        let filled = ((percent / 100.0) * bar_width as f64) as usize;
-        let empty = bar_width - filled;
-
-        print!(
-            "\r[{}{}] {:>6.2}% | {:>7.2} MB/s | ETA: {:>3.0}s | {}/{} pieces",
-            "=".repeat(filled),
-            " ".repeat(empty),
-            percent,
-            speed,
-            eta,
-            completed_count,
-            pieces_count
-        );
-        let _ = io::stdout().flush();
     }
 }
