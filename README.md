@@ -1,17 +1,28 @@
 # RBittorrent
 
-A minimal BitTorrent client for downloading .torrent files via the command line.
+A minimal asynchronous BitTorrent client for downloading .torrent files via the command line.
 
 ## Features
 - Parses .torrent files (bencode decoding, info hash calculation).
 - Supports HTTP and UDP trackers to fetch peers.
+- Fully async (Tokio-based) networking.
+- Downloads from up to 20 peers concurrently.
 - Connects to peers, performs handshake, and manages choke/unchoke messages.
 - Downloads pieces with SHA1 verification for data integrity.
+- Shared download state with safe coordination between peers.
 - Shows real-time progress: completion %, download speed, ETA, and piece count.
+
+## Architecture Highlights
+- Uses tokio for async TCP and HTTP.
+- Peer connections are managed as independent async tasks.
+- A semaphore limits concurrency to 20 active peer sessions.
+- Pieces are claimed atomically to avoid duplicate downloads.
+- Verified pieces are written directly to disk at the correct offset.
 
 ## Notes
 - Only supports single-file torrents.
 - Default peer port is 6881.
+- Download-only.
 
 ## Testing
 ```shell
@@ -49,5 +60,5 @@ b7ab11d25a5e3fa8809f5ef2398b3871a2158f19
 Download torrent
 ```shell
 $ cargo run -- -o /tmp download data/debian.torrent
-⠠ [00:01:51] [>---------------------------------------] 18.25 MiB/784.00 MiB (66m) Piece 75/3136
+⠤ [00:02:35] [###################>--------------------] 372.50 MiB/784.00 MiB (3m) Piece 1493/3136
 ```
