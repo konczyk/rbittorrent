@@ -88,6 +88,14 @@ impl DownloadState {
         }
     }
 
+    pub fn count_complete(&self) -> usize {
+        self.completed.iter().map(|byte| byte.count_ones() as usize).sum()
+    }
+
+    pub fn is_complete(&self, total: usize) -> bool {
+        self.count_complete() == total
+    }
+
     pub fn is_piece_complete(&self, index: usize) -> bool {
         let byte_idx = index / 8;
         let bit_idx = index % 8;
@@ -248,25 +256,31 @@ impl Download {
         let peers = self.torrent.get_peers(self.peer_id.as_str()).await?;
         let semaphore = Arc::new(tokio::sync::Semaphore::new(20));
 
-        let mut tasks = vec![];
+        let mut set = tokio::task::JoinSet::new();
         for peer in peers {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let addr = format!("{}:{}", peer.0, peer.1);
             let d = Arc::clone(&self);
 
-            let handle = tokio::spawn(async move {
+            set.spawn(async move {
                 let _permit = permit;
                 let _ = Self::run_peer_session(d, addr).await;
             });
-            tasks.push(handle);
         }
 
-        for t in tasks {
-            let _ = t.await;
+        loop {
+            if self.state.lock().unwrap().is_complete(self.torrent.count_pieces() as usize) {
+                set.abort_all();
+                break;
+            }
+
+            if set.is_empty() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        let state = self.state.lock().unwrap();
-        state.progress_bar.finish_with_message("Download Complete");
         Ok(())
     }
 
@@ -275,7 +289,6 @@ impl Download {
             let mut file = self.file.lock().unwrap();
 
             let offset = (piece as u64) * (self.torrent.piece_length as u64);
-            // TODO what if any of these fail?
             file.seek(SeekFrom::Start(offset))?;
             file.write_all(&bytes)?;
             file.sync_all()?;
@@ -305,9 +318,10 @@ impl Download {
         let mut received = 0u32;
         let mut piece_index = None;
         let mut piece_length = 0;
+        let total_pieces = d.torrent.count_pieces() as usize;
 
         loop {
-            if d.state.lock().unwrap().progress_bar.is_finished() {
+            if d.state.lock().unwrap().is_complete(total_pieces) {
                 return Ok(());
             }
             
@@ -363,7 +377,7 @@ impl Download {
                                            state.set_complete(piece as usize);
                                            peer_session.update_have(piece as usize);
                                            state.progress_bar.inc(buf.len() as u64);
-                                           state.progress_bar.set_message(format!("Piece {}/{}", piece + 1, d.torrent.count_pieces()));
+                                           state.progress_bar.set_message(format!("Piece {}/{}", state.count_complete(), d.torrent.count_pieces()));
                                            piece_index = None;
                                         },
                                         Err(e) => {
