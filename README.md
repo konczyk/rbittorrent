@@ -7,6 +7,7 @@ A minimal asynchronous BitTorrent client for downloading .torrent files via the 
 - Supports HTTP and UDP trackers to fetch peers.
 - Fully async (Tokio-based) networking.
 - Downloads from up to 20 peers concurrently.
+- Request pipelining (block-level) to maximize peer throughput.
 - Connects to peers, performs handshake, and manages choke/unchoke messages.
 - Downloads pieces with SHA1 verification for data integrity.
 - Shared download state with safe coordination between peers.
@@ -16,7 +17,9 @@ A minimal asynchronous BitTorrent client for downloading .torrent files via the 
 - Uses tokio for async TCP and HTTP.
 - Peer connections are managed as independent async tasks.
 - A semaphore limits concurrency to 20 active peer sessions.
+- Each peer pipelines multiple block requests per piece
 - Pieces are claimed atomically to avoid duplicate downloads.
+- In-progress pieces are tracked and released on choke/error.
 - Verified pieces are written directly to disk at the correct offset.
 
 ## Notes

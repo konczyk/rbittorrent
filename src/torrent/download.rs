@@ -143,6 +143,9 @@ pub struct Download {
 }
 
 impl Download {
+    const MAX_REQUESTS: u32 = 10;
+    const BLOCK_SIZE: u32 = 16384;
+
     pub fn new(torrent: Torrent, state: Arc<Mutex<DownloadState>>, file: Arc<Mutex<File>>, debug: bool) -> Download {
         Download { torrent, peer_id: "avknevkjn43t34tn389f".to_string(), state, file, debug }
     }
@@ -220,11 +223,11 @@ impl Download {
         Ok(())
     }
 
-    fn calc_block_size(piece_length: u32, received: u32) -> u32 {
-        if piece_length - received >= 16 * 1024 {
-            16 * 1024
+    fn calc_block_size(piece_length: u32, requested: u32) -> u32 {
+        if piece_length - requested >=  Self::BLOCK_SIZE {
+            Self::BLOCK_SIZE
         } else {
-            piece_length - received
+            piece_length - requested
         }
     }
 
@@ -316,6 +319,7 @@ impl Download {
 
         let mut buf = vec![];
         let mut received = 0u32;
+        let mut requested = 0u32;
         let mut piece_index = None;
         let mut piece_length = 0;
         let total_pieces = d.torrent.count_pieces() as usize;
@@ -332,8 +336,24 @@ impl Download {
                     piece_length = d.torrent.calc_piece_length(piece as u32);
                     buf = vec![0u8; piece_length as usize];
                     received = 0u32;
-                    let block_size = Self::calc_block_size(piece_length, received);
-                    d.request_piece(&mut stream, 13, 6, piece as u32, 0, block_size).await?;
+                    requested = 0u32;
+                }
+            }
+
+            if piece_index.is_some() && !peer_session.choked {
+                if let Some(piece) = piece_index {
+                    loop {
+                        if (requested - received) / Self::BLOCK_SIZE >= Self::MAX_REQUESTS {
+                            break;
+                        }
+                        let block_size = Self::calc_block_size(piece_length, requested);
+                        if block_size > 0 {
+                            d.request_piece(&mut stream, 13, 6, piece, requested, block_size).await?;
+                            requested += block_size;
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -386,9 +406,6 @@ impl Download {
                                             d.debug(&e.to_string());
                                         }
                                     }
-                                } else {
-                                    let block_size = Self::calc_block_size(piece_length, received);
-                                    d.request_piece(&mut stream, 13, 6, piece, begin + data.len() as u32, block_size).await?;
                                 }
                             } else {
                                 d.debug("Received Piece message, but I've got no piece!")
