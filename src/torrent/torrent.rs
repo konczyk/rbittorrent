@@ -1,24 +1,25 @@
 use crate::torrent::bencode;
-use reqwest::blocking;
 use sha1::digest::core_api::CoreWrapper;
 use sha1::digest::Output;
 use sha1::{Digest, Sha1, Sha1Core};
 use std::io;
 use std::io::ErrorKind::{InvalidData, TimedOut, WouldBlock};
-use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, UdpSocket};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 
-pub struct Torrent<'a> {
+pub struct Torrent {
     pub url: String,
     pub length: isize,
     pub piece_length: isize,
-    pub pieces: &'a [u8],
+    pub pieces: Vec<u8>,
     pub info_hash: Output<CoreWrapper<Sha1Core>>,
 }
 
-impl<'a> Torrent<'a> {
-    pub fn new(data: &'a [u8]) -> Torrent<'a> {
+impl Torrent {
+    pub fn new(data: &[u8]) -> Torrent {
         let (node, _) = bencode::decode_bencoded_value(data);
         let d = match &node.value {
             bencode::BencodeValue::Dict(d) => d,
@@ -56,14 +57,14 @@ impl<'a> Torrent<'a> {
                 &raw[colon+1..]
             },
             _ => panic!("Torrent URL not found"),
-        };
+        }.to_vec();
 
         Torrent { url, length, piece_length, pieces, info_hash }
     }
 
-    pub fn get_peers(&self, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
+    pub async fn get_peers(&self, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
         if self.url.starts_with("http") {
-            self.get_peers_by_http(peer_id)
+            self.get_peers_by_http(peer_id).await
         } else if self.url.starts_with("udp") {
             self.get_peers_by_udp(peer_id)
         } else {
@@ -169,13 +170,15 @@ impl<'a> Torrent<'a> {
         Ok(vec![])
     }
 
-    fn get_peers_by_http(&self, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
+    async fn get_peers_by_http(&self, peer_id: &str) -> io::Result<Vec<(Ipv4Addr, u16)>> {
         let mut peers_list = Vec::new();
         let info_hash = self.info_hash.iter().map(|b| format!("%{:02x}", b)).collect::<String>();
-        let body = blocking::get(
+        let body = reqwest::get(
             format!("{}?info_hash={info_hash}&peer_id={peer_id}&port=6881&uploaded=0&downloaded=0&left={}&compact=1", self.url, self.length)
-        ).and_then(|result| result.bytes());
-        body.map(|b| {
+        ).await.map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, e.to_string())
+        })?;
+        body.bytes().await.map(|b| {
             let (node, _) = bencode::decode_bencoded_value(b.iter().as_slice());
             if let bencode::BencodeValue::Dict(d) = node.value {
                 if let Some(bencode::BencodeNode { value: bencode::BencodeValue::Binary(peers), raw: _ }) = d.get("peers") {
@@ -190,16 +193,16 @@ impl<'a> Torrent<'a> {
         })
     }
 
-    pub fn send_handshake(&self, stream: &mut TcpStream, peer_id: &str) -> io::Result<[u8; 68]> {
+    pub async fn send_handshake(&self, stream: &mut TcpStream, peer_id: &str) -> io::Result<[u8; 68]> {
         let mut handshake: Vec<u8> = Vec::with_capacity(68);
         handshake.push(19);
         handshake.extend_from_slice(b"BitTorrent protocol");
         handshake.extend_from_slice(&[0u8; 8]);
         handshake.extend_from_slice(self.info_hash.as_slice());
         handshake.extend_from_slice(peer_id.as_bytes());
-        stream.write_all(&handshake)?;
+        stream.write_all(&handshake).await?;
         let mut response = [0u8; 68];
-        stream.read_exact(&mut response)?;
+        stream.read_exact(&mut response).await?;
         Ok(response)
     }
 

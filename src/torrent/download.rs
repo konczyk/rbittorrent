@@ -1,11 +1,15 @@
-use crate::torrent::torrent;
+use crate::torrent::torrent::Torrent;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::io::{ErrorKind, Seek, SeekFrom, Write};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 
 pub struct PeerSession {
     pub bitfield: Vec<u8>,
@@ -24,7 +28,7 @@ impl PeerSession {
     pub fn update_have(&mut self, piece_index: usize) {
         let byte_index = piece_index / 8;
         let bit_index = piece_index % 8;
-        if byte_index > self.bitfield.len() {
+        if byte_index >= self.bitfield.len() {
             self.bitfield.resize(byte_index + 1, 0);
         }
         self.bitfield[byte_index] |= 1 << (7 - bit_index);
@@ -64,17 +68,75 @@ impl TryFrom<u8> for MessageId {
     }
 }
 
-pub struct Download<'a> {
-    torrent: &'a torrent::Torrent<'a>,
-    peer_id: &'a str,
-    output_dir: String,
-    output_file: String,
+pub struct DownloadState {
+    pub completed: Vec<u8>,
+    pub in_progress: Vec<u8>,
+    pub progress_bar: ProgressBar,
+}
+
+impl DownloadState {
+    pub fn new(count: usize, length: usize) -> Self {
+        let pb = ProgressBar::new(length as u64);
+        pb.set_style(ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
+            .unwrap()
+            .progress_chars("#>-"));
+        Self {
+            completed: vec![0; (count as f64 / 8f64).ceil() as usize],
+            in_progress: vec![0; (count as f64 / 8f64).ceil() as usize],
+            progress_bar: pb,
+        }
+    }
+
+    pub fn is_piece_complete(&self, index: usize) -> bool {
+        let byte_idx = index / 8;
+        let bit_idx = index % 8;
+        self.completed.get(byte_idx)
+            .map(|&byte| (byte >> (7 - bit_idx) & 1) != 0)
+            .unwrap_or(false)
+    }
+
+    pub fn is_piece_in_progress(&self, index: usize) -> bool {
+        let byte_idx = index / 8;
+        let bit_idx = index % 8;
+        self.in_progress.get(byte_idx)
+            .map(|&byte| (byte >> (7 - bit_idx) & 1) != 0)
+            .unwrap_or(false)
+    }
+
+    pub fn set_complete(&mut self, index: usize) {
+        let byte_idx = index / 8;
+        let bit_idx = index % 8;
+        if byte_idx < self.completed.len() {
+            self.completed[byte_idx] |= 1 << (7 - bit_idx);
+            self.in_progress[byte_idx] &= !(1 << (7 - bit_idx));
+        }
+    }
+
+    pub fn set_in_progress(&mut self, index: usize, value: bool) {
+        let byte_idx = index / 8;
+        let bit_idx = index % 8;
+        if byte_idx < self.in_progress.len() {
+            if value {
+                self.in_progress[byte_idx] |= 1 << (7 - bit_idx);
+            } else {
+                self.in_progress[byte_idx] &= !(1 << (7 - bit_idx));
+            }
+        }
+    }
+}
+
+pub struct Download {
+    torrent: Torrent,
+    peer_id: String,
+    state: Arc<Mutex<DownloadState>>,
+    file: Arc<Mutex<File>>,
     debug: bool,
 }
 
-impl<'a> Download<'a> {
-    pub fn new(torrent: &'a torrent::Torrent<'a>, output_dir: String, output_file: String, debug: bool) -> Download<'a> {
-        Download { torrent, peer_id: "avknevkjn43t34tn389f", output_dir, output_file, debug }
+impl Download {
+    pub fn new(torrent: Torrent, state: Arc<Mutex<DownloadState>>, file: Arc<Mutex<File>>, debug: bool) -> Download {
+        Download { torrent, peer_id: "avknevkjn43t34tn389f".to_string(), state, file, debug }
     }
 
     fn debug_err(&self, msg: &str, e: io::Error) -> io::Error {
@@ -90,10 +152,10 @@ impl<'a> Download<'a> {
         }
     }
 
-    fn read_message(&self, stream: &mut TcpStream) -> io::Result<(u32, Option<MessageId>, Vec<u8>)> {
+    async fn read_message(&self, stream: &mut TcpStream) -> io::Result<(u32, Option<MessageId>, Vec<u8>)> {
         let mut buf_len = [0u8; 4];
 
-        if let Err(e) = stream.read_exact(&mut buf_len) {
+        if let Err(e) = stream.read_exact(&mut buf_len).await {
             if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
                 return Ok((0, None, vec![]));
             }
@@ -105,7 +167,7 @@ impl<'a> Download<'a> {
         }
 
         let mut buf_id = [0u8; 1];
-        if let Err(e) = stream.read_exact(&mut buf_id) {
+        if let Err(e) = stream.read_exact(&mut buf_id).await {
             if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
                 return Ok((0, None, vec![]));
             }
@@ -117,7 +179,7 @@ impl<'a> Download<'a> {
         }
 
         let mut buf_payload = vec![0u8; (len - 1) as usize];
-        if let Err(e) = stream.read_exact(&mut buf_payload) {
+        if let Err(e) = stream.read_exact(&mut buf_payload).await {
             if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
                 return Ok((0, None, vec![]));
             }
@@ -127,24 +189,24 @@ impl<'a> Download<'a> {
         Ok((len, Some(id), buf_payload))
     }
 
-    fn send_interested(&self, stream: &mut TcpStream) -> io::Result<()>{
+    async fn send_interested(&self, stream: &mut TcpStream) -> io::Result<()>{
         let mut msg = Vec::with_capacity(5);
         msg.extend_from_slice(&1u32.to_be_bytes());
         msg.push(2);
-        stream.write_all(msg.as_slice())?;
+        stream.write_all(msg.as_slice()).await?;
 
         self.debug("Wrote messages len 1, id 2");
         Ok(())
     }
 
-    fn request_piece(&self, stream: &mut TcpStream, len: u32, id: u8, index: u32, begin: u32, length: u32) -> io::Result<()>{
+    async fn request_piece(&self, stream: &mut TcpStream, len: u32, id: u8, index: u32, begin: u32, length: u32) -> io::Result<()>{
         let mut msg = Vec::with_capacity(17);
         msg.extend_from_slice(&len.to_be_bytes());
         msg.push(id);
         msg.extend_from_slice(&index.to_be_bytes());
         msg.extend_from_slice(&begin.to_be_bytes());
         msg.extend_from_slice(&length.to_be_bytes());
-        stream.write_all(msg.as_slice())?;
+        stream.write_all(msg.as_slice()).await?;
 
         self.debug(format!("Sent message len {len}, id {id}, index {index}, begin: {begin}, length: {length}").as_str());
         Ok(())
@@ -170,134 +232,170 @@ impl<'a> Download<'a> {
         expected == actual.as_slice()
     }
 
-    fn download_piece(&self, stream: &mut TcpStream, piece: u32, peer_session: &mut PeerSession) -> io::Result<Vec<u8>> {
-        let piece_length = self.torrent.calc_piece_length(piece);
+    pub fn claim_piece(&self, peer_session: &PeerSession) -> Option<usize> {
+        let mut state = self.state.lock().unwrap();
 
-        let mut buf = vec![0u8; piece_length as usize];
-        let mut received = 0u32;
+        for i in 0..self.torrent.count_pieces() as usize {
+            if !state.is_piece_complete(i) && !state.is_piece_in_progress(i) && peer_session.has_piece(i) {
+                state.set_in_progress(i, true);
+                return Some(i);
+            }
+        }
+        None
+    }
 
-        if !peer_session.choked {
-            let block_size = Self::calc_block_size(piece_length, received);
-            self.request_piece(stream, 13, 6, piece, 0, block_size)?;
+    pub async fn download(self: Arc<Self>) -> io::Result<()> {
+        let peers = self.torrent.get_peers(self.peer_id.as_str()).await?;
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(20));
+
+        let mut tasks = vec![];
+        for peer in peers {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let addr = format!("{}:{}", peer.0, peer.1);
+            let d = Arc::clone(&self);
+
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                let _ = Self::run_peer_session(d, addr).await;
+            });
+            tasks.push(handle);
         }
 
+        for t in tasks {
+            let _ = t.await;
+        }
+
+        let state = self.state.lock().unwrap();
+        state.progress_bar.finish_with_message("Download Complete");
+        Ok(())
+    }
+
+    fn write_piece(&self, piece: u32, bytes: &[u8]) -> io::Result<()> {
+        if self.verify_piece(piece as usize, &bytes) {
+            let mut file = self.file.lock().unwrap();
+
+            let offset = (piece as u64) * (self.torrent.piece_length as u64);
+            // TODO what if any of these fail?
+            file.seek(SeekFrom::Start(offset))?;
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            Ok(())
+        } else {
+            Err(io::Error::new(ErrorKind::Other, format!("SHA1 check failed for piece {}", piece)))
+        }
+
+    }
+
+    pub async fn run_peer_session(d: Arc<Download>, addr: String) -> io::Result<()> {
+        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await??;
+
+        match d.torrent.send_handshake(&mut stream, d.peer_id.as_str()).await {
+            Ok(_) => d.debug(&format!("Handshake successful with {}", addr)),
+            Err(e) => {
+                d.debug("Handshake failed, switching to another peer");
+                return Err(e)
+            }
+        }
+
+        d.send_interested(&mut stream).await?;
+
+        let mut peer_session = PeerSession { bitfield: vec![], choked: true };
+
+        let mut buf = vec![];
+        let mut received = 0u32;
+        let mut piece_index = None;
+        let mut piece_length = 0;
+
         loop {
-            self.debug(format!("Waiting for message... (Piece {}, Received {})", piece, received).as_str());
-            match self.read_message(stream) {
-                Ok((len, Some(id), payload)) => {
-                    self.debug(format!("Read message len {len}, id {:?}, payload size {}", id, payload.len()).as_str());
+            if d.state.lock().unwrap().progress_bar.is_finished() {
+                return Ok(());
+            }
+            
+            d.debug(&format!("Waiting for message... (Piece {:?}, Received {})", piece_index, received));
+            if piece_index.is_none() && !peer_session.choked {
+                if let Some(piece) = d.claim_piece(&peer_session) {
+                    piece_index = Some(piece as u32);
+                    piece_length = d.torrent.calc_piece_length(piece as u32);
+                    buf = vec![0u8; piece_length as usize];
+                    received = 0u32;
+                    let block_size = Self::calc_block_size(piece_length, received);
+                    d.request_piece(&mut stream, 13, 6, piece as u32, 0, block_size).await?;
+                }
+            }
+
+            let message = timeout(Duration::from_secs(120), d.read_message(&mut stream)).await?;
+
+            match message {
+                Ok((_, Some(id), payload)) => {
                     match id {
                         MessageId::Choke => {
                             peer_session.choked = true;
-                            return Err(io::Error::new(io::ErrorKind::Interrupted, "Choked"));
-                        }
+                            // cancel work in progress
+                            if let Some(piece) = piece_index {
+                                let mut state = d.state.lock().unwrap();
+                                state.set_in_progress(piece as usize, false);
+                                piece_index = None;
+                            }
+                            d.debug(&format!("Received message {:?}", id));
+                        },
                         MessageId::Unchoke => {
                             peer_session.choked = false;
-                            let block_size = Self::calc_block_size(piece_length, received);
-                            self.request_piece(stream, 13, 6, piece, 0, block_size)?;
+                            d.debug(&format!("Received message {:?}", id));
                         },
                         MessageId::Have => {
                             peer_session.update_have(u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize);
-                        }
-                        MessageId::Piece => {
-                            let begin = u32::from_be_bytes(payload[4..8].try_into().unwrap());
-                            let data = &payload[8..];
-                            received += data.len() as u32;
-                            buf[begin as usize..begin as usize + data.len()].copy_from_slice(data);
-                            if received >= piece_length {
-                                return Ok(buf);
-                            }
-                            let block_size = Self::calc_block_size(piece_length, received);
-                            self.request_piece(stream, 13, 6, piece, begin + data.len() as u32, block_size)?;
+                            d.debug(&format!("Received message {:?}", id));
                         },
-                        id => eprintln!("Received unhandled message id {:?}", id),
+                        MessageId::Bitfield => {
+                            peer_session.bitfield = payload;
+                            d.debug(&format!("Received message {:?}", id));
+                        },
+                        MessageId::Piece => {
+                            if let Some(piece) = piece_index {
+                                let begin = u32::from_be_bytes(payload[4..8].try_into().unwrap());
+                                let data = &payload[8..];
+                                received += data.len() as u32;
+                                buf[begin as usize..begin as usize + data.len()].copy_from_slice(data);
+                                if received >= piece_length {
+                                    let mut state = d.state.lock().unwrap();
+                                    match d.write_piece(piece, &buf) {
+                                        Ok(_) => {
+                                           state.set_complete(piece as usize);
+                                           peer_session.update_have(piece as usize);
+                                           state.progress_bar.inc(buf.len() as u64);
+                                           state.progress_bar.set_message(format!("Piece {}/{}", piece + 1, d.torrent.count_pieces()));
+                                           piece_index = None;
+                                        },
+                                        Err(e) => {
+                                            state.set_in_progress(piece as usize, false);
+                                            piece_index = None;
+                                            d.debug(&e.to_string());
+                                        }
+                                    }
+                                } else {
+                                    let block_size = Self::calc_block_size(piece_length, received);
+                                    d.request_piece(&mut stream, 13, 6, piece, begin + data.len() as u32, block_size).await?;
+                                }
+                            } else {
+                                d.debug("Received Piece message, but I've got no piece!")
+                            }
+                        },
+                        id => {
+                            d.debug(&format!("Received message {:?}", id));
+                        },
                     };
                 },
                 Ok(_) => (),
                 Err(e) => {
-                    eprintln!("got error: {}", e);
-                    break;
+                    d.debug(&format!("got error: {}", &e));
+                    if let Some(piece) = piece_index {
+                        let mut state = d.state.lock().unwrap();
+                        state.set_in_progress(piece as usize, false);
+                    }
+                    return Err(e)
                 }
             }
         }
-        Ok(vec![])
     }
 
-    pub fn download(&self) -> io::Result<()> {
-        let final_path = format!("{}/{}", &self.output_dir, &self.output_file);
-        let mut output_file = File::create(&final_path)?;
-        output_file.set_len(self.torrent.length as u64)?;
-
-        let peers = self.torrent.get_peers(self.peer_id)?;
-        let pieces = self.torrent.count_pieces();
-        let mut completed = vec![false; pieces as usize];
-
-        let pb = ProgressBar::new(self.torrent.length as u64);
-        pb.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) {msg}")
-            .unwrap()
-            .progress_chars("#>-"));
-
-        for peer in &peers {
-            self.debug(format!("Connecting to peer {}", peer.0).as_str());
-            if let Ok(mut stream) = TcpStream::connect_timeout(&SocketAddr::new(IpAddr::from(peer.0), peer.1), Duration::from_secs(5)) {
-                stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-                stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-                let mut peer_session = PeerSession { bitfield: vec![], choked: true };
-                match self.torrent.send_handshake(&mut stream, self.peer_id) {
-                    Ok(_) => self.debug("Peer accepted handshake"),
-                    Err(_) => {
-                        self.debug("Handshake failed, switching to another peer");
-                        continue
-                    }
-                }
-                loop {
-                    match self.read_message(&mut stream) {
-                        Ok((_, Some(id), payload)) => match id {
-                            MessageId::Bitfield => peer_session.bitfield = payload,
-                            MessageId::Unchoke => peer_session.choked = false,
-                            MessageId::Have => (),
-                            _ => (),
-                        },
-                        _ => break,
-                    }
-                }
-                self.send_interested(&mut stream)?;
-                for piece_index in 0..pieces {
-                    if completed[piece_index as usize] || !peer_session.has_piece(piece_index as usize) {
-                        continue;
-                    }
-                    match self.download_piece(&mut stream, piece_index, &mut peer_session) {
-                        Ok(bytes) => {
-                            if self.verify_piece(piece_index as usize, &bytes) {
-                                let offset = (piece_index as u64) * (self.torrent.piece_length as u64);
-                                output_file.seek(SeekFrom::Start(offset))?;
-                                output_file.write_all(&bytes)?;
-
-                                completed[piece_index as usize] = true;
-                                pb.inc(bytes.len() as u64); // Automatically updates speed and ETA
-                                pb.set_message(format!("Piece {}/{}", piece_index + 1, pieces));
-                            } else {
-                                self.debug(format!("SHA1 check failed for piece {}", piece_index).as_str());
-                            }
-                            continue
-                        },
-                        Err(_) => continue,
-                   }
-                }
-
-            }
-            if completed.iter().all(|x| *x) {
-                break;
-            }
-        }
-
-        if completed.iter().all(|x| *x) {
-            self.debug("\nDownload finished");
-        } else {
-            self.debug(format!("\nDownload finished with {} pieces missing", completed.iter().filter(|x| **x == false).count()).as_str());
-        }
-        pb.finish_with_message("Download Complete");
-        Ok(())
-    }
 }
